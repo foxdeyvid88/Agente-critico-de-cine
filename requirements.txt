@@ -1,0 +1,11 @@
+# Variables de entorno en el código
+python-dotenv>=1.0.0
+
+# Strands Agents SDK instalado desde GitHub (requerido)
+python-dotenv>=1.0.0
+strands-agents>=1.0.0
+
+# Opcional: instala UNA de las siguientes variantes si usas OpenAI o Anthropic directo
+# (sustituye o complementa la línea anterior; pip fusiona el mismo paquete con extras)
+# strands-agents[openai] @ git+https://github.com/strands-agents/sdk-python.git
+# strands-agents[anthropic] @ git+https://github.com/strands-agents/sdk-python.git
