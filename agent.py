@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import boto3
+import botocore.exceptions
 from dotenv import load_dotenv
 from strands import Agent
 
@@ -23,12 +25,48 @@ Cuando recomiendes una película, justifica la elección: explica por qué es un
 cinematográfica (ideas de dirección, coherencia dramática, innovación visual, trabajo de reparto, \
 u otros méritos concretos), sin spoilers innecesarios."""
 
+_BEDROCK_HELP = """
+No hay credenciales de AWS para usar Amazon Bedrock.
+
+Configura ".env" con AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY y AWS_REGION, o usa "aws configure".
+
+Si prefieres uso gratuito en tu PC, pon LLM_PROVIDER=ollama (ver .env.example).
+""".strip()
+
+
+def _resolve_llm_provider() -> str:
+    """Prioridad: LLM_PROVIDER explícito; si no, API keys; por defecto ollama (gratuito en local)."""
+    explicit = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    if explicit and explicit not in ("", "bedrock"):
+        return explicit
+    if explicit in ("bedrock", "aws"):
+        return "bedrock"
+    if (os.getenv("OPENAI_API_KEY") or "").strip():
+        return "openai"
+    if (os.getenv("ANTHROPIC_API_KEY") or "").strip():
+        return "anthropic"
+    return "ollama"
+
 
 def _build_model() -> Any | None:
-    """Construye el modelo según LLM_PROVIDER; None usa el proveedor por defecto del SDK (Bedrock)."""
-    raw = (os.getenv("LLM_PROVIDER") or "bedrock").strip().lower()
+    """Construye el modelo según LLM_PROVIDER; None solo para Bedrock por defecto del SDK."""
+    raw = _resolve_llm_provider()
     if raw in ("bedrock", "aws", ""):
         return None
+
+    if raw == "ollama":
+        try:
+            from strands.models import OllamaModel
+        except ImportError as exc:
+            raise SystemExit(
+                "Falta el extra 'ollama' del SDK. Instala:\n"
+                '  pip install "strands-agents[ollama]"'
+            ) from exc
+
+        host = (os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").strip()
+        model_id = (os.getenv("MODEL_ID") or "").strip() or "llama3.2"
+        temperature = float((os.getenv("OLLAMA_TEMPERATURE") or "0.4").strip())
+        return OllamaModel(host=host, model_id=model_id, temperature=temperature)
 
     if raw == "openai":
         try:
@@ -36,7 +74,7 @@ def _build_model() -> Any | None:
         except ImportError as exc:
             raise SystemExit(
                 "Falta el extra 'openai' del SDK. Instala, por ejemplo:\n"
-                '  pip install "strands-agents[openai] @ git+https://github.com/strands-agents/sdk-python.git"'
+                '  pip install "strands-agents[openai]"'
             ) from exc
 
         api_key = os.getenv("OPENAI_API_KEY")
@@ -57,7 +95,7 @@ def _build_model() -> Any | None:
         except ImportError as exc:
             raise SystemExit(
                 "Falta el extra 'anthropic' del SDK. Instala, por ejemplo:\n"
-                '  pip install "strands-agents[anthropic] @ git+https://github.com/strands-agents/sdk-python.git"'
+                '  pip install "strands-agents[anthropic]"'
             ) from exc
 
         api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -72,7 +110,7 @@ def _build_model() -> Any | None:
         )
 
     raise SystemExit(
-        f"LLM_PROVIDER='{raw}' no es válido. Usa: bedrock, openai o anthropic."
+        f"LLM_PROVIDER='{raw}' no es válido. Usa: ollama, bedrock, openai o anthropic."
     )
 
 
@@ -82,8 +120,7 @@ def _build_agent() -> Agent:
     if model is not None:
         return Agent(system_prompt=SYSTEM_PROMPT, model=model)
 
-    # Bedrock (por defecto): credenciales AWS habituales (p. ej. AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
-    # y región; opcionalmente fija MODEL_ID y región vía variables de entorno.
+    # Bedrock (explícito): credenciales AWS habituales
     model_id = (os.getenv("MODEL_ID") or "").strip()
     if model_id:
         from strands.models import BedrockModel
@@ -100,6 +137,9 @@ def _build_agent() -> Agent:
                 temperature=0.4,
             ),
         )
+
+    if boto3.Session().get_credentials() is None:
+        raise SystemExit(_BEDROCK_HELP)
 
     return Agent(system_prompt=SYSTEM_PROMPT)
 
@@ -126,7 +166,11 @@ def main() -> None:
             print("Hasta pronto.", flush=True)
             break
 
-        agent(user_text)
+        try:
+            agent(user_text)
+        except botocore.exceptions.NoCredentialsError:
+            print(_BEDROCK_HELP, flush=True)
+            break
 
 
 if __name__ == "__main__":
